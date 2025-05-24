@@ -1,9 +1,10 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
-import { graphql, GraphQLObjectType, GraphQLSchema, GraphQLString, GraphQLNonNull, GraphQLList, GraphQLBoolean } from 'graphql';
+import { graphql, GraphQLObjectType, GraphQLSchema, GraphQLNonNull, GraphQLList, GraphQLBoolean, validate, parse } from 'graphql';
 import { MemberTypeGraphQL, PostGraphQL, ProfileGraphQL, UserGraphQL } from './types.js';
 import { UUIDType } from './types/uuid.js';
 import { MemberTypeIdType } from './types/member-type-id.js';
+import depthLimit from 'graphql-depth-limit';
 import { 
   CreateUserInput, 
   ChangeUserInput, 
@@ -26,17 +27,33 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       },
     },
     async handler(req) {
-      return graphql({
-        schema,
-        source: req.body.query,
-        variableValues: req.body.variables,
-        contextValue: { prisma }
-      }).then((result) => {
+      try {
+        const document = parse(req.body.query);
+        const validationErrors = validate(schema, document, [depthLimit(5)]);
+        if (validationErrors.length > 0) {
+          return {
+            data: null,
+            errors: validationErrors
+          };
+        }
+
+        return graphql({
+          schema,
+          source: req.body.query,
+          variableValues: req.body.variables,
+          contextValue: { prisma }
+        }).then((result) => {
+          return {
+            data: result.data,
+            errors: result.errors,
+          };
+        });
+      } catch (error) {
         return {
-          data: result.data,
-          errors: result.errors,
+          data: null,
+          errors: [error]
         };
-      });
+      }
     },
   });
 };
