@@ -32,14 +32,8 @@ export const ProfileGraphQL = new GraphQLObjectType({
     memberTypeId: { type: new GraphQLNonNull(MemberTypeIdType) },
     memberType: {
       type: new GraphQLNonNull(MemberTypeGraphQL),
-      resolve: async (parent, _args, { prisma }) => {
-        const memberType = await prisma.memberType.findUnique({
-          where: { id: parent.memberTypeId }
-        });
-        if (!memberType) {
-          throw new Error(`MemberType not found for id: ${parent.memberTypeId}`);
-        }
-        return memberType;
+      resolve: async (parent, _args, { loaders }) => {
+        return loaders.memberTypeLoader.load(parent.memberTypeId);
       }
     }
   })
@@ -54,38 +48,26 @@ export const UserGraphQL = new GraphQLObjectType({
     balance: { type: new GraphQLNonNull(GraphQLFloat) },
     profile: {
       type: ProfileGraphQL,
-      resolve: async (parent, _args, { prisma }) => {
-        return prisma.profile.findUnique({
-          where: { userId: parent.id }
-        });
+      resolve: async (parent, _args, { loaders }) => {
+        return loaders.profileLoader.load(parent.id);
       }
     },
     posts: {
       type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(PostGraphQL))),
-      resolve: async (parent, _args, { prisma }) => {
-        return prisma.post.findMany({
-          where: { authorId: parent.id }
-        });
+      resolve: async (parent, _args, { loaders }) => {
+        return loaders.postsLoader.load(parent.id);
       }
     },
     userSubscribedTo: {
       type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(UserGraphQL))),
-      resolve: async (parent, _args, { prisma }) => {
-        const subscriptions = await prisma.subscribersOnAuthors.findMany({
-          where: { subscriberId: parent.id },
-          include: { author: true }
-        });
-        return subscriptions.map(sub => sub.author);
+      resolve: async (parent, _args, { loaders }) => {
+        return loaders.userSubscribedToLoader.load(parent.id);
       }
     },
     subscribedToUser: {
       type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(UserGraphQL))),
-      resolve: async (parent, _args, { prisma }) => {
-        const subscriptions = await prisma.subscribersOnAuthors.findMany({
-          where: { authorId: parent.id },
-          include: { subscriber: true }
-        });
-        return subscriptions.map(sub => sub.subscriber);
+      resolve: async (parent, _args, { loaders }) => {
+        return loaders.subscribedToUserLoader.load(parent.id);
       }
     }
   })

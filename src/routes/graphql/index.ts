@@ -1,10 +1,12 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
-import { graphql, GraphQLObjectType, GraphQLSchema, GraphQLNonNull, GraphQLList, GraphQLBoolean, validate, parse } from 'graphql';
+import { graphql, GraphQLObjectType, GraphQLSchema, GraphQLNonNull, GraphQLList, GraphQLBoolean, validate, parse, GraphQLResolveInfo } from 'graphql';
 import { MemberTypeGraphQL, PostGraphQL, ProfileGraphQL, UserGraphQL } from './types.js';
 import { UUIDType } from './types/uuid.js';
 import { MemberTypeIdType } from './types/member-type-id.js';
 import depthLimit from 'graphql-depth-limit';
+import { parseResolveInfo, ResolveTree } from 'graphql-parse-resolve-info';
+import { createLoaders } from './loaders.js';
 import { 
   CreateUserInput, 
   ChangeUserInput, 
@@ -37,11 +39,13 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
           };
         }
 
+        const loaders = createLoaders(prisma);
+
         return graphql({
           schema,
           source: req.body.query,
           variableValues: req.body.variables,
-          contextValue: { prisma }
+          contextValue: { prisma, loaders }
         }).then((result) => {
           return {
             data: result.data,
@@ -80,8 +84,25 @@ const RootQueryType = new GraphQLObjectType({
     },
     users: {
       type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(UserGraphQL))),
-      resolve: async (_parent, _args, { prisma }) => {
-        return prisma.user.findMany();
+      resolve: async (_parent, _args, { prisma, loaders }, info: GraphQLResolveInfo) => {
+        const parsedInfo = parseResolveInfo(info) as ResolveTree;
+        const userFields = parsedInfo?.fieldsByTypeName?.User as Record<string, unknown> || {};
+        const needsSubs = 'userSubscribedTo' in userFields || 'subscribedToUser' in userFields;
+        
+        const users = await prisma.user.findMany({
+          include: {
+            _count: needsSubs ? {
+              select: {
+                userSubscribedTo: true,
+                subscribedToUser: true
+              }
+            } : undefined
+          }
+        });
+
+        users.forEach(user => loaders.userLoader.prime(user.id, user));
+        
+        return users;
       }
     },
     user: {
@@ -89,10 +110,8 @@ const RootQueryType = new GraphQLObjectType({
       args: {
         id: { type: new GraphQLNonNull(UUIDType) }
       },
-      resolve: async (_parent, { id }, { prisma }) => {
-        return prisma.user.findUnique({
-          where: { id }
-        });
+      resolve: async (_parent, { id }, { loaders }) => {
+        return loaders.userLoader.load(id);
       }
     },
     posts: {
@@ -131,6 +150,22 @@ const RootQueryType = new GraphQLObjectType({
     }
   }
 });
+
+UserGraphQL.toConfig().fields.posts.resolve = async (parent, _args, { loaders }) => {
+  return loaders.postsLoader.load(parent.id);
+};
+
+UserGraphQL.toConfig().fields.profile.resolve = async (parent, _args, { loaders }) => {
+  return loaders.profileLoader.load(parent.id);
+};
+
+UserGraphQL.toConfig().fields.userSubscribedTo.resolve = async (parent, _args, { loaders }) => {
+  return loaders.userSubscribedToLoader.load(parent.id);
+};
+
+UserGraphQL.toConfig().fields.subscribedToUser.resolve = async (parent, _args, { loaders }) => {
+  return loaders.subscribedToUserLoader.load(parent.id);
+};
 
 const RootMutationType = new GraphQLObjectType({
   name: 'Mutation',
